@@ -41,6 +41,8 @@ from torch.utils import tensorboard
 from torchvision.utils import make_grid, save_image
 from utils import save_checkpoint, restore_checkpoint
 import ThreedUnet
+from torchvision import transforms as ttransforms
+import itertools
 
 FLAGS = flags.FLAGS
 
@@ -155,6 +157,25 @@ def plot_video(v, name=''):
   plt.title(name)
   plt.show()
 
+class MyDataset(torch.utils.data.IterableDataset):
+    def __init__(self, data,size):
+        super(MyDataset).__init__()
+
+        self.data=data
+        transforms = [ttransforms.Resize((size, size))]
+        frame_transform = ttransforms.Compose(transforms)
+        self.frame_transform = frame_transform
+
+    def __iter__(self):
+        vid=next(self.data)['image'].astype(float)/255
+        #video_frames=[]
+        #for frame in vid:
+        #    video_frames.append(self.frame_transform(torch.from_numpy(frame).permute(0,3,1,2)))
+        # Stack it into a tensor
+        #out_vid = torch.stack(video_frames, 0)
+        
+        yield self.frame_transform(torch.from_numpy(vid).permute(0,3,1,2))
+
 
 def train(config, workdir):
   """Runs the training pipeline.
@@ -175,11 +196,13 @@ def train(config, workdir):
 
   # Initialize model.
   #score_model = mutils.create_model(config)
+  Image_size=32
   score_model= ThreedUnet.Unet3D(
-    dim = 64,
+    dim = Image_size,
     dim_mults = (1, 2,4)
   ).cuda()
   ema = ExponentialMovingAverage(score_model.parameters(), decay=config.model.ema_rate)
+  config.optim.lr=config.optim.lr/10
   optimizer = losses.get_optimizer(config, score_model.parameters())
   state = dict(optimizer=optimizer, model=score_model, ema=ema, step=0)
 
@@ -200,8 +223,11 @@ def train(config, workdir):
   #eval_iter = iter(eval_ds)  # pytype: disable=wrong-arg-types
     
   train_ds = make_freeform_tfrecord_dataset(is_train=True, shuffle=True)
+  torch_dataset=MyDataset(train_ds.as_numpy_iterator(),size=Image_size)
+  dataloader=torch.utils.data.DataLoader(torch_dataset,batch_size=8)
+  train_iter=iter(dataloader)
   #train_iter = train_ds.as_numpy_iterator()
-  train_iter=train_ds.batch(2).as_numpy_iterator()
+  #train_iter=train_ds.batch(8).as_numpy_iterator()
   eval_iter=train_ds.as_numpy_iterator()
   # Create data normalizer and its inverse
   scaler = datasets.get_data_scaler(config)
@@ -245,12 +271,12 @@ def train(config, workdir):
 
   for step in range(initial_step, num_train_steps + 1):
     # Convert data to JAX arrays and normalize them. Use ._numpy() to avoid copy.
-    batch=next(train_iter)['image'].astype(float)/255
-    batch = torch.from_numpy(batch).to(config.device).float()
-    #batch = batch.permute(0, 3, 1, 2)
-    batch = batch.permute(0,4,1,2,3)
+    #batch=next(train_iter)['image'].astype(float)/255
+    #batch = torch.from_numpy(batch).to(config.device).float()
+    #batch = batch.permute(0,4,1,2,3)
+    batch=next(train_iter).to(config.device)
     batch = scaler(batch)
-    print(batch.shape)
+    if step==initial_step:print('batch shape:',batch.shape)
     # Execute one training step
     loss = train_step_fn(state, batch)
     if step % config.training.log_freq == 0:
