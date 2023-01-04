@@ -177,7 +177,7 @@ def train(config, workdir):
   #score_model = mutils.create_model(config)
   score_model= ThreedUnet.Unet3D(
     dim = 64,
-    dim_mults = (1, 2)
+    dim_mults = (1, 2,4)
   ).cuda()
   ema = ExponentialMovingAverage(score_model.parameters(), decay=config.model.ema_rate)
   optimizer = losses.get_optimizer(config, score_model.parameters())
@@ -200,7 +200,8 @@ def train(config, workdir):
   #eval_iter = iter(eval_ds)  # pytype: disable=wrong-arg-types
     
   train_ds = make_freeform_tfrecord_dataset(is_train=True, shuffle=True)
-  train_iter = train_ds.as_numpy_iterator()
+  #train_iter = train_ds.as_numpy_iterator()
+  train_iter=train_ds.batch(2).as_numpy_iterator()
   eval_iter=train_ds.as_numpy_iterator()
   # Create data normalizer and its inverse
   scaler = datasets.get_data_scaler(config)
@@ -244,17 +245,12 @@ def train(config, workdir):
 
   for step in range(initial_step, num_train_steps + 1):
     # Convert data to JAX arrays and normalize them. Use ._numpy() to avoid copy.
-    batch1=next(train_iter)['image'][:2].astype(float)/255
-    batch2=next(train_iter)['image'][:2].astype(float)/255
-    newshape=(1,batch1.shape[0],batch1.shape[1],batch1.shape[2],batch1.shape[3])
-    batch=np.concatenate((batch1.reshape(newshape),batch2.reshape(newshape)),axis=0)
-    batch=batch1.reshape(newshape)
-    #batch = torch.from_numpy(next(train_iter)['image']._numpy()).to(config.device).float()
+    batch=next(train_iter)['image'].astype(float)/255
     batch = torch.from_numpy(batch).to(config.device).float()
     #batch = batch.permute(0, 3, 1, 2)
     batch = batch.permute(0,4,1,2,3)
     batch = scaler(batch)
-    #print(batch.shape)
+    print(batch.shape)
     # Execute one training step
     loss = train_step_fn(state, batch)
     if step % config.training.log_freq == 0:
