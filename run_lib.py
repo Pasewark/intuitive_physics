@@ -158,23 +158,22 @@ def plot_video(v, name=''):
   plt.show()
 
 class MyDataset(torch.utils.data.IterableDataset):
-    def __init__(self, data,size):
+    def __init__(self, data,batch_size,size):
         super(MyDataset).__init__()
 
         self.data=data
         transforms = [ttransforms.Resize((size, size))]
         frame_transform = ttransforms.Compose(transforms)
         self.frame_transform = frame_transform
+        self.batch_size=batch_size
 
     def __iter__(self):
-        vid=next(self.data)['image'].astype(float)/255
-        #video_frames=[]
-        #for frame in vid:
-        #    video_frames.append(self.frame_transform(torch.from_numpy(frame).permute(0,3,1,2)))
-        # Stack it into a tensor
-        #out_vid = torch.stack(video_frames, 0)
-        
-        yield self.frame_transform(torch.from_numpy(vid).permute(0,3,1,2))
+        while True:
+            videos=[]
+            for _ in range(self.batch_size):
+                vid=next(self.data)['image'].astype(float)/255
+                videos.append(self.frame_transform(torch.from_numpy(vid).permute(3,0,1,2)).type(torch.float32))
+            yield torch.stack(videos,0)
 
 
 def train(config, workdir):
@@ -202,7 +201,7 @@ def train(config, workdir):
     dim_mults = (1, 2,4)
   ).cuda()
   ema = ExponentialMovingAverage(score_model.parameters(), decay=config.model.ema_rate)
-  config.optim.lr=config.optim.lr/10
+  config.optim.lr=config.optim.lr/100
   optimizer = losses.get_optimizer(config, score_model.parameters())
   state = dict(optimizer=optimizer, model=score_model, ema=ema, step=0)
 
@@ -223,8 +222,8 @@ def train(config, workdir):
   #eval_iter = iter(eval_ds)  # pytype: disable=wrong-arg-types
     
   train_ds = make_freeform_tfrecord_dataset(is_train=True, shuffle=True)
-  torch_dataset=MyDataset(train_ds.as_numpy_iterator(),size=Image_size)
-  dataloader=torch.utils.data.DataLoader(torch_dataset,batch_size=8)
+  torch_dataset=MyDataset(train_ds.as_numpy_iterator(),batch_size=8,size=Image_size)
+  dataloader=torch.utils.data.DataLoader(torch_dataset,batch_size=1)
   train_iter=iter(dataloader)
   #train_iter = train_ds.as_numpy_iterator()
   #train_iter=train_ds.batch(8).as_numpy_iterator()
@@ -269,57 +268,28 @@ def train(config, workdir):
   # In case there are multiple hosts (e.g., TPU pods), only log to host 0
   logging.info("Starting training loop at step %d." % (initial_step,))
 
-  for step in range(initial_step, num_train_steps + 1):
-    # Convert data to JAX arrays and normalize them. Use ._numpy() to avoid copy.
-    #batch=next(train_iter)['image'].astype(float)/255
-    #batch = torch.from_numpy(batch).to(config.device).float()
-    #batch = batch.permute(0,4,1,2,3)
-    batch=next(train_iter).to(config.device)
-    batch = scaler(batch)
-    if step==initial_step:print('batch shape:',batch.shape)
-    # Execute one training step
-    loss = train_step_fn(state, batch)
-    if step % config.training.log_freq == 0:
-      logging.info("step: %d, training_loss: %.5e" % (step, loss.item()))
-      writer.add_scalar("training_loss", loss, step)
+  #for step in range(initial_step, num_train_steps + 1):
+  for epoch in range(100):
+    losses_arr=[]
+    print(epoch)
+    train_ds = make_freeform_tfrecord_dataset(is_train=True, shuffle=True)
+    torch_dataset=MyDataset(train_ds.as_numpy_iterator(),batch_size=16,size=Image_size)
+    dataloader=torch.utils.data.DataLoader(torch_dataset,batch_size=1)
+    for step,data in enumerate(torch_dataset):
+      # Convert data to JAX arrays and normalize them. Use ._numpy() to avoid copy.
+      #batch=next(train_iter)['image'].astype(float)/255
+      #batch = torch.from_numpy(batch).to(config.device).float()
+      #batch = batch.permute(0,4,1,2,3)
+      batch=data.to(config.device).squeeze(0)
+      batch = scaler(batch)
+      if step==0:print('batch shape:',batch.shape,batch.dtype)
+      # Execute one training step
+      loss = train_step_fn(state, batch)
+      losses_arr.append(loss.item())
+      if step%50==0:
+        print(step,'loss',np.mean(losses_arr))
+        losses_arr=[]
 
-    # Save a temporary checkpoint to resume training after pre-emption periodically
-    if step != 0 and step % config.training.snapshot_freq_for_preemption == 0:
-      save_checkpoint(checkpoint_meta_dir, state)
-
-    # Report the loss on an evaluation dataset periodically
-    if step % config.training.eval_freq == 0 and False:
-      eval_batch = torch.from_numpy(next(eval_iter)['image']._numpy()).to(config.device).float()
-      eval_batch = eval_batch.permute(0, 3, 1, 2)
-      eval_batch = scaler(eval_batch)
-      eval_loss = eval_step_fn(state, eval_batch)
-      logging.info("step: %d, eval_loss: %.5e" % (step, eval_loss.item()))
-      writer.add_scalar("eval_loss", eval_loss.item(), step)
-
-    # Save a checkpoint periodically and generate samples if needed
-    if step != 0 and step % config.training.snapshot_freq == 0 or step == num_train_steps and False:
-      # Save the checkpoint.
-      save_step = step // config.training.snapshot_freq
-      save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_{save_step}.pth'), state)
-
-      # Generate and save samples
-      if config.training.snapshot_sampling:
-        ema.store(score_model.parameters())
-        ema.copy_to(score_model.parameters())
-        sample, n = sampling_fn(score_model)
-        ema.restore(score_model.parameters())
-        this_sample_dir = os.path.join(sample_dir, "iter_{}".format(step))
-        tf.io.gfile.makedirs(this_sample_dir)
-        nrow = int(np.sqrt(sample.shape[0]))
-        image_grid = make_grid(sample, nrow, padding=2)
-        sample = np.clip(sample.permute(0, 2, 3, 1).cpu().numpy() * 255, 0, 255).astype(np.uint8)
-        with tf.io.gfile.GFile(
-            os.path.join(this_sample_dir, "sample.np"), "wb") as fout:
-          np.save(fout, sample)
-
-        with tf.io.gfile.GFile(
-            os.path.join(this_sample_dir, "sample.png"), "wb") as fout:
-          save_image(image_grid, fout)
 
 
 def evaluate(config,
