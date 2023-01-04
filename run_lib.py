@@ -198,7 +198,7 @@ def train(config, workdir):
   Image_size=32
   score_model= ThreedUnet.Unet3D(
     dim = Image_size,
-    dim_mults = (1, 2,4)
+    dim_mults = (1, 2,4,8)
   ).cuda()
   ema = ExponentialMovingAverage(score_model.parameters(), decay=config.model.ema_rate)
   #config.optim.lr=config.optim.lr/10
