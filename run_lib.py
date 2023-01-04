@@ -201,7 +201,7 @@ def train(config, workdir):
     dim_mults = (1, 2,4)
   ).cuda()
   ema = ExponentialMovingAverage(score_model.parameters(), decay=config.model.ema_rate)
-  config.optim.lr=config.optim.lr/100
+  #config.optim.lr=config.optim.lr/10
   optimizer = losses.get_optimizer(config, score_model.parameters())
   state = dict(optimizer=optimizer, model=score_model, ema=ema, step=0)
 
@@ -273,8 +273,7 @@ def train(config, workdir):
     losses_arr=[]
     print(epoch)
     train_ds = make_freeform_tfrecord_dataset(is_train=True, shuffle=True)
-    torch_dataset=MyDataset(train_ds.as_numpy_iterator(),batch_size=16,size=Image_size)
-    dataloader=torch.utils.data.DataLoader(torch_dataset,batch_size=1)
+    torch_dataset=MyDataset(train_ds.as_numpy_iterator(),batch_size=32,size=Image_size)
     for step,data in enumerate(torch_dataset):
       # Convert data to JAX arrays and normalize them. Use ._numpy() to avoid copy.
       #batch=next(train_iter)['image'].astype(float)/255
