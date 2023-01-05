@@ -43,6 +43,7 @@ from utils import save_checkpoint, restore_checkpoint
 import ThreedUnet
 from torchvision import transforms as ttransforms
 import itertools
+import matplotlib.pyplot as plt
 
 FLAGS = flags.FLAGS
 
@@ -258,10 +259,10 @@ def train(config, workdir):
                                     likelihood_weighting=likelihood_weighting)
 
   # Building sampling functions
-  if config.training.snapshot_sampling:
-    sampling_shape = (config.training.batch_size, config.data.num_channels,
-                      config.data.image_size, config.data.image_size)
-    sampling_fn = sampling.get_sampling_fn(config, sde, sampling_shape, inverse_scaler, sampling_eps)
+  #sampling_shape = (config.training.batch_size, config.data.num_channels,
+  #                  config.data.image_size, config.data.image_size)
+  sampling_shape=(4,3,15,32,32)
+  sampling_fn = sampling.get_sampling_fn(config, sde, sampling_shape, inverse_scaler, sampling_eps)
 
   num_train_steps = config.training.n_iters
 
@@ -273,13 +274,15 @@ def train(config, workdir):
     losses_arr=[]
     print(epoch)
     train_ds = make_freeform_tfrecord_dataset(is_train=True, shuffle=True)
-    torch_dataset=MyDataset(train_ds.as_numpy_iterator(),batch_size=32,size=Image_size)
+    torch_dataset=MyDataset(train_ds.as_numpy_iterator(),batch_size=4,size=Image_size)
     for step,data in enumerate(torch_dataset):
       # Convert data to JAX arrays and normalize them. Use ._numpy() to avoid copy.
       #batch=next(train_iter)['image'].astype(float)/255
       #batch = torch.from_numpy(batch).to(config.device).float()
       #batch = batch.permute(0,4,1,2,3)
       batch=data.to(config.device).squeeze(0)
+      for sample_num in range(4):
+          plot_video(batch[sample_num].permute(1,2,3,0).detach().cpu().numpy())
       batch = scaler(batch)
       if step==0:print('batch shape:',batch.shape,batch.dtype)
       # Execute one training step
@@ -288,6 +291,13 @@ def train(config, workdir):
       if step%50==0:
         print(step,'loss',np.mean(losses_arr))
         losses_arr=[]
+        ema.store(score_model.parameters())
+        ema.copy_to(score_model.parameters())
+        sample, n = sampling_fn(score_model)
+        ema.restore(score_model.parameters())
+        for sample_num in range(4):
+          plot_video(sample[sample_num].permute(1,2,3,0).detach().cpu().numpy())
+
 
 
 
