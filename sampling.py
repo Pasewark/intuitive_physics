@@ -183,7 +183,7 @@ class EulerMaruyamaPredictor(Predictor):
     z = torch.randn_like(x)
     drift, diffusion = self.rsde.sde(x, t)
     x_mean = x + drift * dt
-    x = x_mean + diffusion[:, None, None, None] * np.sqrt(-dt) * z
+    x = x_mean + diffusion[:, None, None, None,None] * np.sqrt(-dt) * z
     return x, x_mean
 
 
@@ -196,7 +196,7 @@ class ReverseDiffusionPredictor(Predictor):
     f, G = self.rsde.discretize(x, t)
     z = torch.randn_like(x)
     x_mean = x - f
-    x = x_mean + G[:, None, None, None] * z
+    x = x_mean + G[:, None, None, None,None] * z
     return x, x_mean
 
 
@@ -216,10 +216,10 @@ class AncestralSamplingPredictor(Predictor):
     sigma = sde.discrete_sigmas[timestep]
     adjacent_sigma = torch.where(timestep == 0, torch.zeros_like(t), sde.discrete_sigmas.to(t.device)[timestep - 1])
     score = self.score_fn(x, t)
-    x_mean = x + score * (sigma ** 2 - adjacent_sigma ** 2)[:, None, None, None]
+    x_mean = x + score * (sigma ** 2 - adjacent_sigma ** 2)[:, None, None, None,None]
     std = torch.sqrt((adjacent_sigma ** 2 * (sigma ** 2 - adjacent_sigma ** 2)) / (sigma ** 2))
     noise = torch.randn_like(x)
-    x = x_mean + std[:, None, None, None] * noise
+    x = x_mean + std[:, None, None, None,None] * noise
     return x, x_mean
 
   def vpsde_update_fn(self, x, t):
@@ -227,9 +227,9 @@ class AncestralSamplingPredictor(Predictor):
     timestep = (t * (sde.N - 1) / sde.T).long()
     beta = sde.discrete_betas.to(t.device)[timestep]
     score = self.score_fn(x, t)
-    x_mean = (x + beta[:, None, None, None] * score) / torch.sqrt(1. - beta)[:, None, None, None]
+    x_mean = (x + beta[:, None, None, None,None] * score) / torch.sqrt(1. - beta)[:, None, None, None,None]
     noise = torch.randn_like(x)
-    x = x_mean + torch.sqrt(beta)[:, None, None, None] * noise
+    x = x_mean + torch.sqrt(beta)[:, None, None, None,None] * noise
     return x, x_mean
 
   def update_fn(self, x, t):
@@ -276,8 +276,8 @@ class LangevinCorrector(Corrector):
       grad_norm = torch.norm(grad.reshape(grad.shape[0], -1), dim=-1).mean()
       noise_norm = torch.norm(noise.reshape(noise.shape[0], -1), dim=-1).mean()
       step_size = (target_snr * noise_norm / grad_norm) ** 2 * 2 * alpha
-      x_mean = x + step_size[:, None, None, None] * grad
-      x = x_mean + torch.sqrt(step_size * 2)[:, None, None, None] * noise
+      x_mean = x + step_size[:, None, None, None,None] * grad
+      x = x_mean + torch.sqrt(step_size * 2)[:, None, None, None,None] * noise
 
     return x, x_mean
 
@@ -313,8 +313,8 @@ class AnnealedLangevinDynamics(Corrector):
       grad = score_fn(x, t)
       noise = torch.randn_like(x)
       step_size = (target_snr * std) ** 2 * 2 * alpha
-      x_mean = x + step_size[:, None, None, None] * grad
-      x = x_mean + noise * torch.sqrt(step_size * 2)[:, None, None, None]
+      x_mean = x + step_size[:, None, None, None,None] * grad
+      x = x_mean + noise * torch.sqrt(step_size * 2)[:, None, None, None,None]
 
     return x, x_mean
 
