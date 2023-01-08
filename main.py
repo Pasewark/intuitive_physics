@@ -22,6 +22,7 @@ from ml_collections.config_flags import config_flags
 import logging
 import os
 import tensorflow as tf
+import torch
 
 FLAGS = flags.FLAGS
 
@@ -31,6 +32,7 @@ flags.DEFINE_string("workdir", None, "Work directory.")
 flags.DEFINE_enum("mode", None, ["train", "eval"], "Running mode: train or eval")
 flags.DEFINE_string("eval_folder", "eval",
                     "The folder name for storing evaluation results")
+flags.DEFINE_enum('gpu',None,['0','1'],'which gpu to use')
 flags.mark_flags_as_required(["workdir", "config", "mode"])
 
 
@@ -48,7 +50,7 @@ def main(argv):
     logger.addHandler(handler)
     logger.setLevel('INFO')
     # Run the training pipeline
-    run_lib.train(FLAGS.config, FLAGS.workdir)
+    run_lib.train(FLAGS.config, FLAGS.workdir,FLAGS.gpu)
   elif FLAGS.mode == "eval":
     # Run the evaluation pipeline
     run_lib.evaluate(FLAGS.config, FLAGS.workdir, FLAGS.eval_folder)
