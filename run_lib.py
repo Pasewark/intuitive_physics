@@ -177,7 +177,7 @@ class MyDataset(torch.utils.data.IterableDataset):
             yield torch.stack(videos,0)
 
 
-def train(config, workdir):
+def train(config, workdir,gpu='0'):
   """Runs the training pipeline.
 
   Args:
@@ -185,8 +185,11 @@ def train(config, workdir):
     workdir: Working directory for checkpoints and TF summaries. If this
       contains checkpoint training will be resumed from the latest checkpoint.
   """
+  tf.config.set_visible_devices([], 'GPU') # need this or else make_freeform_tfrecord_dataset takes up ton of mem
+  
 
   # Create directories for experimental logs
+  config.device=torch.device('cuda:'+gpu)
   sample_dir = os.path.join(workdir, "samples")
   tf.io.gfile.makedirs(sample_dir)
 
@@ -200,9 +203,10 @@ def train(config, workdir):
   score_model= ThreedUnet.Unet3D(
     dim = Image_size,
     dim_mults = (1, 2,4,8)
-  ).cuda()
+  ).to(config.device)
   ema = ExponentialMovingAverage(score_model.parameters(), decay=config.model.ema_rate)
-  #config.optim.lr=config.optim.lr/10
+  if gpu=='1':
+    config.optim.lr=config.optim.lr*2
   optimizer = losses.get_optimizer(config, score_model.parameters())
   state = dict(optimizer=optimizer, model=score_model, ema=ema, step=0)
 
@@ -215,20 +219,8 @@ def train(config, workdir):
   # Resume training when intermediate checkpoints are detected
   state = restore_checkpoint(checkpoint_meta_dir, state, config.device)
   initial_step = int(state['step'])
-
-  # Build data iterators
-  #train_ds, eval_ds, _ = datasets.get_dataset(config,
-  #                                            uniform_dequantization=config.data.uniform_dequantization)
-  #train_iter = iter(train_ds)  # pytype: disable=wrong-arg-types
-  #eval_iter = iter(eval_ds)  # pytype: disable=wrong-arg-types
     
-  train_ds = make_freeform_tfrecord_dataset(is_train=True, shuffle=True)
-  torch_dataset=MyDataset(train_ds.as_numpy_iterator(),batch_size=16,size=Image_size)
-  dataloader=torch.utils.data.DataLoader(torch_dataset,batch_size=1)
-  train_iter=iter(dataloader)
-  #train_iter = train_ds.as_numpy_iterator()
-  #train_iter=train_ds.batch(8).as_numpy_iterator()
-  eval_iter=train_ds.as_numpy_iterator()
+  
   # Create data normalizer and its inverse
   scaler = datasets.get_data_scaler(config)
   inverse_scaler = datasets.get_data_inverse_scaler(config)
@@ -257,6 +249,7 @@ def train(config, workdir):
   eval_step_fn = losses.get_step_fn(sde, train=False, optimize_fn=optimize_fn,
                                     reduce_mean=reduce_mean, continuous=continuous,
                                     likelihood_weighting=likelihood_weighting)
+  
 
   # Building sampling functions
   #sampling_shape = (config.training.batch_size, config.data.num_channels,
@@ -269,12 +262,12 @@ def train(config, workdir):
   # In case there are multiple hosts (e.g., TPU pods), only log to host 0
   logging.info("Starting training loop at step %d." % (initial_step,))
 
-  #for step in range(initial_step, num_train_steps + 1):
+  mybatch_size=32 if gpu=='1' else 24
   for epoch in range(100):
     losses_arr=[]
-    print(epoch)
+    print('epoch',epoch)
     train_ds = make_freeform_tfrecord_dataset(is_train=True, shuffle=True)
-    torch_dataset=MyDataset(train_ds.as_numpy_iterator(),batch_size=16,size=Image_size)
+    torch_dataset=MyDataset(train_ds.as_numpy_iterator(),batch_size=mybatch_size,size=Image_size)
     for step,data in enumerate(torch_dataset):
       # Convert data to JAX arrays and normalize them. Use ._numpy() to avoid copy.
       #batch=next(train_iter)['image'].astype(float)/255
@@ -288,10 +281,11 @@ def train(config, workdir):
       # Execute one training step
       loss = train_step_fn(state, batch)
       losses_arr.append(loss.item())
+      if step*mybatch_size>299000:break
       if (step+1)%50==0:
         print(step,'loss',np.mean(losses_arr))
         losses_arr=[]
-        if (step+1)%300==0:
+        if (step+1)%1000==0:
           print('displaying samples')
           ema.store(score_model.parameters())
           ema.copy_to(score_model.parameters())
